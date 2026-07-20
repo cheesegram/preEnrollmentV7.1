@@ -190,7 +190,11 @@ function Dashboard() {
             });
         }
 
-        return result;
+        return [...result].sort((left, right) => {
+            const leftId = String(left.applicantID ?? "");
+            const rightId = String(right.applicantID ?? "");
+            return leftId.localeCompare(rightId, undefined, { numeric: true, sensitivity: "base" });
+        });
     }, [pendingApplicants, modalQuery]);
 
     const modalStudents = useMemo(() => {

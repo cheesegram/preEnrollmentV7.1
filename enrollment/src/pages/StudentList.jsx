@@ -9,7 +9,7 @@ import api from "../lib/axios";
 
 const YEAR_OPTIONS = ["All Year", "First Year", "Second Year", "Third Year", "Fourth Year"];
 const SEMESTER_OPTIONS = ["All Sem", "1st Sem", "2nd Sem"];
-const STATUS_OPTIONS = ["To Be Admitted", "All Registered", "Enrolled", "Irregular"];
+const STATUS_OPTIONS = ["To Be Admitted", "All Registered", "Block", "Irregular"];
 const YEAR_MAP = { "First Year": "1", "Second Year": "2", "Third Year": "3", "Fourth Year": "4" };
 const SEMESTER_MAP = { "1st Sem": "1st", "2nd Sem": "2nd" };
 

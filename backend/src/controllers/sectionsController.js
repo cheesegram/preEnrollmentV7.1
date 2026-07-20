@@ -17,9 +17,9 @@ function toStatus(regular, irregular, totalCapacity) {
 
 export async function syncSectionsFromStudents(req, res) {
   try {
-    // Use regular-track students for automatic grouping. Keep legacy `Regular` records supported.
+    // Use block-track students for automatic grouping.
     const enrolledStudents = await Student.find({
-      status: { $in: ["Enrolled", "Regular"] },
+      status: { $in: ["Block"] },
     }).lean();
 
     const grouped = new Map();

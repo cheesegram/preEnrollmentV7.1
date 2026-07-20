@@ -227,6 +227,7 @@ function StudentsTable({
   const getStatusStyle = (status) => {
     const normalizedStatus = status?.toLowerCase() || "";
 
+    if (normalizedStatus === "block") return "bg-blue-100 text-blue-700 font-bold";
     if (normalizedStatus.includes("enrolled")) return "bg-blue-100 text-blue-700 font-bold";
     if (normalizedStatus.includes("irregular") || normalizedStatus.includes("overloaded")) {
       return "bg-red-100 text-red-700 font-bold";
