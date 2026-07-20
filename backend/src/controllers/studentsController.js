@@ -544,11 +544,54 @@ export async function enrollFromToBeAdmitted(req, res) {
     ).trim();
     const studentNumber = rawId.replace(/^A-?/i, "");
 
+    // Get existing sections for auto-sectioning
+    const existingSections = await Section.find({}).lean();
+    const sectionGroups = new Map();
+    for (const section of existingSections) {
+      const year = normalizeText(section.year);
+      const semester = normalizeSemester(section.semester);
+      const sectionName = normalizeSectionName(section.section);
+      if (!year || !sectionName) {
+        continue;
+      }
+
+      const key = `${year}::${semester}`;
+      const group = sectionGroups.get(key) || [];
+      group.push({
+        year,
+        semester,
+        section: sectionName,
+        regular: Number(section.regular ?? 0),
+        irregular: Number(section.irregular ?? 0),
+        regular_capacity: Number(section.regular_capacity ?? DEFAULT_REGULAR_CAPACITY),
+        irregular_capacity: Number(section.irregular_capacity ?? DEFAULT_IRREGULAR_CAPACITY),
+        total_capacity: Number(section.total_capacity ?? (DEFAULT_REGULAR_CAPACITY + DEFAULT_IRREGULAR_CAPACITY)),
+      });
+      sectionGroups.set(key, group);
+    }
+
+    // Create a temporary student object for section selection
+    const tempStudent = {
+      ...applicantData,
+      year: 1,
+      semester: "1st",
+      status: "Block",
+    };
+
+    // Choose section using auto-sectioning logic
+    const chosenSection = chooseSectionForStudent(sectionGroups, tempStudent);
+
     // Build the student object with all applicant attributes
+    const now = new Date();
     const student = {
       ...applicantData,
       student_number: studentNumber,
       status: "Block",
+      year: 1,
+      semester: "1st",
+      section: chosenSection.section,
+      createdAt: now,
+      updatedAt: now,
     };
 
     // Remove any applicant-specific fields that shouldn't be on the student
@@ -559,6 +602,40 @@ export async function enrollFromToBeAdmitted(req, res) {
 
     // Insert the student
     await Student.create(student);
+
+    // Update section counts
+    if (isIrregularStatus(student.status)) {
+      chosenSection.irregular = Number(chosenSection.irregular ?? 0) + 1;
+    } else {
+      chosenSection.regular = Number(chosenSection.regular ?? 0) + 1;
+    }
+    chosenSection.status = toStatus(chosenSection.regular, chosenSection.irregular, chosenSection.regular_capacity);
+
+    // Update or create the section
+    const sectionOps = {
+      updateOne: {
+        filter: {
+          year: chosenSection.year,
+          section: chosenSection.section,
+          semester: chosenSection.semester,
+        },
+        update: {
+          $set: {
+            year: chosenSection.year,
+            section: chosenSection.section,
+            semester: chosenSection.semester,
+            regular: chosenSection.regular,
+            irregular: chosenSection.irregular,
+            regular_capacity: chosenSection.regular_capacity,
+            irregular_capacity: chosenSection.irregular_capacity,
+            total_capacity: chosenSection.total_capacity,
+            status: chosenSection.status,
+          },
+        },
+        upsert: true,
+      },
+    };
+    await Section.bulkWrite([sectionOps], { ordered: false });
 
     res.status(200).json({
       message: "Student enrolled successfully",
