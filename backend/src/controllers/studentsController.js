@@ -351,10 +351,35 @@ export async function getAdmittedApplicants(req, res) {
         "Pending"
       ).trim() || "Pending";
 
+      // Extract year, semester, section for grouping
+      const year = String(
+        applicant.year ??
+        applicant.curriculum_year ??
+        applicant.year_level ??
+        ""
+      ).trim();
+
+      const semester = String(
+        applicant.semester ??
+        applicant.curriculum_semester ??
+        applicant.term ??
+        ""
+      ).trim();
+
+      const section = String(
+        applicant.section ??
+        applicant.curriculum_section ??
+        applicant.section_name ??
+        ""
+      ).trim();
+
       return {
         applicantID,
         applicant_name: `${firstName} ${lastName}`.trim(),
         status,
+        year: year || "N/A",
+        semester: semester || "N/A",
+        section: section || "N/A",
       };
     }).filter((applicant) => applicant.applicantID || applicant.applicant_name || applicant.status);
 
@@ -492,9 +517,6 @@ export async function enrollFromToBeAdmitted(req, res) {
       return res.status(400).json({ message: "applicantID is required" });
     }
 
-    // Try to find and remove from admitted-applicants in pre-admission DB first
-    const AdmittedApplicants = getPreAdmissionModel("AdmittedApplicant", "admitted-applicants");
-
     // Build a flexible search query trying multiple field name/number formats
     const searchConditions = [
       { applicantID },
@@ -510,14 +532,19 @@ export async function enrollFromToBeAdmitted(req, res) {
       searchConditions.push({ _id: new mongoose.Types.ObjectId(applicantID) });
     }
 
-    let deleted = await AdmittedApplicants.findOneAndDelete({
+    // First, find the applicant without deleting — to check for duplicate student_number
+    const AdmittedApplicants = getPreAdmissionModel("AdmittedApplicant", "admitted-applicants");
+
+    let applicant = await AdmittedApplicants.findOne({
       $or: searchConditions,
     }).lean();
 
-    if (!deleted) {
+    let sourceDb = "admitted-applicants";
+
+    if (!applicant) {
       // Fall back to to_be_admitted in pre-enrollment DB
       const ToBeAdmitted = getPreEnrollmentModel("ToBeAdmitted", "to_be_admitted");
-      deleted = await ToBeAdmitted.findOneAndDelete({
+      applicant = await ToBeAdmitted.findOne({
         $or: [
           { applicantID },
           { applicant_id: applicantID },
@@ -525,14 +552,15 @@ export async function enrollFromToBeAdmitted(req, res) {
           { applicant_number: Number(applicantID) },
         ],
       }).lean();
+      sourceDb = "to_be_admitted";
 
-      if (!deleted) {
+      if (!applicant) {
         return res.status(404).json({ message: "Applicant not found in database" });
       }
     }
 
     // Copy all attributes from the applicant, omitting _id and __v
-    const { _id, __v, ...applicantData } = deleted;
+    const { _id, __v, ...applicantData } = applicant;
 
     // Generate student_number by stripping "A-" from applicant_id
     const rawId = String(
@@ -543,6 +571,33 @@ export async function enrollFromToBeAdmitted(req, res) {
       ""
     ).trim();
     const studentNumber = rawId.replace(/^A-?/i, "");
+
+    // Check if student_number already exists in the database BEFORE deleting the applicant
+    const existingStudent = await Student.findOne({ student_number: studentNumber }).lean();
+    if (existingStudent) {
+      return res.status(409).json({
+        message: "Enrollment blocked: Student number already exists",
+        blockReason: "student_exists",
+        student_number: studentNumber,
+      });
+    }
+
+    // Duplicate check passed — now delete the applicant from whichever source it came from
+    if (sourceDb === "admitted-applicants") {
+      await AdmittedApplicants.findOneAndDelete({
+        $or: searchConditions,
+      }).lean();
+    } else {
+      const ToBeAdmitted = getPreEnrollmentModel("ToBeAdmitted", "to_be_admitted");
+      await ToBeAdmitted.findOneAndDelete({
+        $or: [
+          { applicantID },
+          { applicant_id: applicantID },
+          { applicant_number: applicantID },
+          { applicant_number: Number(applicantID) },
+        ],
+      }).lean();
+    }
 
     // Get existing sections for auto-sectioning
     const existingSections = await Section.find({}).lean();
@@ -643,6 +698,311 @@ export async function enrollFromToBeAdmitted(req, res) {
     });
   } catch (error) {
     console.error("Error in enrollFromToBeAdmitted controller", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+/**
+ * Helper: find an applicant by ID from admitted-applicants (fallback to to_be_admitted).
+ * Returns { applicant, applicantData, studentNumber, sourceDb } or null if not found.
+ */
+async function findApplicantForEnrollment(applicantID) {
+  const searchConditions = [
+    { applicantID },
+    { applicant_id: applicantID },
+    { applicant_number: applicantID },
+    { applicant_number: Number(applicantID) },
+    { applicantId: applicantID },
+    { applicantId: Number(applicantID) },
+  ];
+
+  if (mongoose.Types.ObjectId.isValid(applicantID)) {
+    searchConditions.push({ _id: new mongoose.Types.ObjectId(applicantID) });
+  }
+
+  const AdmittedApplicants = getPreAdmissionModel("AdmittedApplicant", "admitted-applicants");
+  let applicant = await AdmittedApplicants.findOne({ $or: searchConditions }).lean();
+  let sourceDb = "admitted-applicants";
+
+  if (!applicant) {
+    const ToBeAdmitted = getPreEnrollmentModel("ToBeAdmitted", "to_be_admitted");
+    applicant = await ToBeAdmitted.findOne({
+      $or: [
+        { applicantID },
+        { applicant_id: applicantID },
+        { applicant_number: applicantID },
+        { applicant_number: Number(applicantID) },
+      ],
+    }).lean();
+    sourceDb = "to_be_admitted";
+  }
+
+  if (!applicant) return null;
+
+  const { _id, __v, ...applicantData } = applicant;
+  const rawId = String(
+    applicantData.applicantID ??
+    applicantData.applicant_id ??
+    applicantData.applicant_number ??
+    applicantData.applicantId ??
+    ""
+  ).trim();
+  const studentNumber = rawId.replace(/^A-?/i, "");
+
+  return { applicant, applicantData, studentNumber, sourceDb };
+}
+
+/**
+ * Build section groups map from existing section records.
+ */
+async function buildSectionGroups() {
+  const existingSections = await Section.find({}).lean();
+  const sectionGroups = new Map();
+  for (const section of existingSections) {
+    const year = normalizeText(section.year);
+    const semester = normalizeSemester(section.semester);
+    const sectionName = normalizeSectionName(section.section);
+    if (!year || !sectionName) continue;
+
+    const key = `${year}::${semester}`;
+    const group = sectionGroups.get(key) || [];
+    group.push({
+      year,
+      semester,
+      section: sectionName,
+      regular: Number(section.regular ?? 0),
+      irregular: Number(section.irregular ?? 0),
+      regular_capacity: Number(section.regular_capacity ?? DEFAULT_REGULAR_CAPACITY),
+      irregular_capacity: Number(section.irregular_capacity ?? DEFAULT_IRREGULAR_CAPACITY),
+      total_capacity: Number(section.total_capacity ?? (DEFAULT_REGULAR_CAPACITY + DEFAULT_IRREGULAR_CAPACITY)),
+    });
+    sectionGroups.set(key, group);
+  }
+  return sectionGroups;
+}
+
+export async function batchEnrollPreview(req, res) {
+  try {
+    const { applicantIDs } = req.body;
+
+    if (!Array.isArray(applicantIDs) || applicantIDs.length === 0) {
+      return res.status(400).json({ message: "applicantIDs array is required" });
+    }
+
+    // Build section groups (simulating current state)
+    const sectionGroups = await buildSectionGroups();
+
+    const preview = { placements: [], blocked: [], notFound: [] };
+
+    for (const applicantID of applicantIDs) {
+      const found = await findApplicantForEnrollment(applicantID);
+      if (!found) {
+        preview.notFound.push({ applicantID });
+        continue;
+      }
+
+      const { applicantData, studentNumber } = found;
+
+      // Check for duplicate student_number
+      const existingStudent = await Student.findOne({ student_number: studentNumber }).lean();
+      if (existingStudent) {
+        preview.blocked.push({
+          applicantID,
+          applicant_name: `${String(applicantData.first_name ?? "").trim()} ${String(applicantData.last_name ?? "").trim()}`.trim() || "Unknown",
+          student_number: studentNumber,
+          reason: "student_exists",
+        });
+        continue;
+      }
+
+      // Determine section via auto-sectioning (simulate only — no deletion yet)
+      const tempStudent = {
+        ...applicantData,
+        year: 1,
+        semester: "1st",
+        status: "Block",
+      };
+      const chosenSection = chooseSectionForStudent(sectionGroups, tempStudent);
+
+      // Track the simulated count
+      if (isIrregularStatus(tempStudent.status)) {
+        chosenSection.irregular = Number(chosenSection.irregular ?? 0) + 1;
+      } else {
+        chosenSection.regular = Number(chosenSection.regular ?? 0) + 1;
+      }
+
+      preview.placements.push({
+        applicantID,
+        applicant_name: `${String(applicantData.first_name ?? "").trim()} ${String(applicantData.last_name ?? "").trim()}`.trim() || "Unknown",
+        student_number: studentNumber,
+        assigned_section: chosenSection.section,
+        assigned_year: "1",
+        assigned_semester: "1st",
+      });
+    }
+
+    res.status(200).json(preview);
+  } catch (error) {
+    console.error("Error in batchEnrollPreview controller", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+export async function batchEnrollFromToBeAdmitted(req, res) {
+  try {
+    const { applicantIDs } = req.body;
+
+    if (!Array.isArray(applicantIDs) || applicantIDs.length === 0) {
+      return res.status(400).json({ message: "applicantIDs array is required" });
+    }
+
+    // Build section groups from current state
+    const sectionGroups = await buildSectionGroups();
+
+    const results = { enrolled: [], blocked: [], notFound: [] };
+
+    for (const applicantID of applicantIDs) {
+      try {
+        const found = await findApplicantForEnrollment(applicantID);
+        if (!found) {
+          results.notFound.push({ applicantID });
+          continue;
+        }
+
+        const { applicantData, studentNumber, sourceDb } = found;
+
+        // Check for duplicate student_number
+        const existingStudent = await Student.findOne({ student_number: studentNumber }).lean();
+        if (existingStudent) {
+          results.blocked.push({
+            applicantID,
+            applicant_name: `${String(applicantData.first_name ?? "").trim()} ${String(applicantData.last_name ?? "").trim()}`.trim() || "Unknown",
+            student_number: studentNumber,
+            reason: "student_exists",
+          });
+          continue;
+        }
+
+        // Determine section via auto-sectioning (before deletion)
+        const tempStudent = {
+          ...applicantData,
+          year: 1,
+          semester: "1st",
+          status: "Block",
+        };
+        const chosenSection = chooseSectionForStudent(sectionGroups, tempStudent);
+
+        // Delete from source
+        const searchConditions = [
+          { applicantID },
+          { applicant_id: applicantID },
+          { applicant_number: applicantID },
+          { applicant_number: Number(applicantID) },
+          { applicantId: applicantID },
+          { applicantId: Number(applicantID) },
+        ];
+
+        if (mongoose.Types.ObjectId.isValid(applicantID)) {
+          searchConditions.push({ _id: new mongoose.Types.ObjectId(applicantID) });
+        }
+
+        let deleted = null;
+        if (sourceDb === "admitted-applicants") {
+          const AdmittedApplicants = getPreAdmissionModel("AdmittedApplicant", "admitted-applicants");
+          deleted = await AdmittedApplicants.findOneAndDelete({ $or: searchConditions }).lean();
+        } else {
+          const ToBeAdmitted = getPreEnrollmentModel("ToBeAdmitted", "to_be_admitted");
+          deleted = await ToBeAdmitted.findOneAndDelete({
+            $or: [
+              { applicantID },
+              { applicant_id: applicantID },
+              { applicant_number: applicantID },
+              { applicant_number: Number(applicantID) },
+            ],
+          }).lean();
+        }
+
+        if (!deleted) {
+          results.notFound.push({ applicantID });
+          continue;
+        }
+
+        // Build and create the student with auto-assigned section
+        const now = new Date();
+        const student = {
+          ...applicantData,
+          student_number: studentNumber,
+          status: "Block",
+          year: 1,
+          semester: "1st",
+          section: chosenSection.section,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        delete student.applicantID;
+        delete student.applicant_id;
+        delete student.applicantId;
+        delete student.applicant_number;
+
+        await Student.create(student);
+
+        // Update section counts
+        if (isIrregularStatus(student.status)) {
+          chosenSection.irregular = Number(chosenSection.irregular ?? 0) + 1;
+        } else {
+          chosenSection.regular = Number(chosenSection.regular ?? 0) + 1;
+        }
+        chosenSection.status = toStatus(chosenSection.regular, chosenSection.irregular, chosenSection.regular_capacity);
+
+        // Upsert the section
+        const sectionOps = {
+          updateOne: {
+            filter: {
+              year: chosenSection.year,
+              section: chosenSection.section,
+              semester: chosenSection.semester,
+            },
+            update: {
+              $set: {
+                year: chosenSection.year,
+                section: chosenSection.section,
+                semester: chosenSection.semester,
+                regular: chosenSection.regular,
+                irregular: chosenSection.irregular,
+                regular_capacity: chosenSection.regular_capacity,
+                irregular_capacity: chosenSection.irregular_capacity,
+                total_capacity: chosenSection.total_capacity,
+                status: chosenSection.status,
+              },
+            },
+            upsert: true,
+          },
+        };
+        await Section.bulkWrite([sectionOps], { ordered: false });
+
+        results.enrolled.push({
+          applicantID,
+          applicant_name: `${String(applicantData.first_name ?? "").trim()} ${String(applicantData.last_name ?? "").trim()}`.trim() || "Unknown",
+          student_number: studentNumber,
+          assigned_section: chosenSection.section,
+        });
+      } catch (err) {
+        console.error(`[BatchEnroll] Error enrolling applicant ${applicantID}:`, err);
+        results.blocked.push({
+          applicantID,
+          applicant_name: "Unknown",
+          reason: "internal_error",
+        });
+      }
+    }
+
+    res.status(200).json({
+      message: `Batch enrollment completed: ${results.enrolled.length} enrolled, ${results.blocked.length} blocked, ${results.notFound.length} not found`,
+      ...results,
+    });
+  } catch (error) {
+    console.error("Error in batchEnrollFromToBeAdmitted controller", error);
     res.status(500).json({ message: "Internal server error" });
   }
 }

@@ -28,6 +28,10 @@ function Dashboard() {
     const [modalQuery, setModalQuery] = useState("");
     const [isImporting, setIsImporting] = useState(false);
     const [isEnrolling, setIsEnrolling] = useState(false);
+    const [isBatchEnrolling, setIsBatchEnrolling] = useState(false);
+    const [selectedSectionGroup, setSelectedSectionGroup] = useState(null);
+    const [previewData, setPreviewData] = useState(null);
+    const [confirmEnrollOpen, setConfirmEnrollOpen] = useState(false);
     const [exportTypeOpen, setExportTypeOpen] = useState(false);
     const [studentExportOpen, setStudentExportOpen] = useState(false);
     const [sectionExportOpen, setSectionExportOpen] = useState(false);
@@ -113,6 +117,7 @@ function Dashboard() {
         setBottomSheetDismissed(true);
         setModalTitle(title);
         setModalQuery("");
+        setSelectedSectionGroup(null);
         setModalOpen(true);
     };
 
@@ -298,17 +303,35 @@ function Dashboard() {
         if (isEnrolling) return;
         try {
             setIsEnrolling(true);
-            await api.post("/students/enroll-from-to-be-admitted", {
+            const response = await api.post("/students/enroll-from-to-be-admitted", {
                 applicantID: applicant.applicantID,
             });
-            toast.success(`Enrolled ${applicant.applicant_name} successfully`);
+            const successMsg = `Enrolled ${applicant.applicant_name} (${applicant.applicantID}) successfully`;
+            toast.success(successMsg);
+            pushImportNotification(successMsg, "success");
             await fetchStudents();
             await fetchSections();
             const pendingRes = await api.get("/students/pre-admission/admitted-applicants", { params: { t: Date.now() } });
             setPendingApplicants(Array.isArray(pendingRes.data) ? pendingRes.data : []);
         } catch (error) {
             console.error("Enroll failed", error);
-            toast.error(error?.response?.data?.message || "Failed to enroll applicant");
+            const responseStatus = error?.response?.status;
+            const blockReason = error?.response?.data?.blockReason;
+            const message = error?.response?.data?.message;
+            const errorMsg = message || "Failed to enroll applicant";
+
+            toast.error(errorMsg);
+            pushImportNotification(
+                `${applicant.applicant_name} (${applicant.applicantID}) : ${errorMsg}`,
+                "error"
+            );
+
+            // Log blocked enrollment details if available
+            if (responseStatus === 409 && blockReason === "student_exists") {
+                const studentNumber = error?.response?.data?.student_number;
+                const detailMsg = `${applicant.applicant_name} (${applicant.applicantID}) : Enrollment blocked - Student number ${studentNumber} already exists in the database`;
+                pushImportNotification(detailMsg, "error");
+            }
         } finally {
             setIsEnrolling(false);
         }
@@ -446,6 +469,100 @@ function Dashboard() {
         } finally {
             setIsImporting(false);
             event.target.value = "";
+        }
+    };
+
+    // Group pending applicants by year, semester, section for the "To Be Admitted" UI
+    const applicantSectionGroups = useMemo(() => {
+        const groups = {};
+        pendingModalApplicants.forEach((applicant) => {
+            const year = String(applicant.year ?? "N/A").trim();
+            const semester = String(applicant.semester ?? "N/A").trim();
+            const section = String(applicant.section ?? "N/A").trim();
+            const key = `${year}::${semester}::${section}`;
+            if (!groups[key]) {
+                groups[key] = {
+                    key,
+                    year,
+                    semester,
+                    section,
+                    applicants: [],
+                };
+            }
+            groups[key].applicants.push(applicant);
+        });
+        return Object.values(groups).sort((a, b) => {
+            const yearCmp = a.year.localeCompare(b.year, undefined, { numeric: true, sensitivity: "base" });
+            if (yearCmp !== 0) return yearCmp;
+            const semesterCmp = a.semester.localeCompare(b.semester, undefined, { numeric: true, sensitivity: "base" });
+            if (semesterCmp !== 0) return semesterCmp;
+            return a.section.localeCompare(b.section, undefined, { numeric: true, sensitivity: "base" });
+        });
+    }, [pendingModalApplicants]);
+
+    const handlePreviewBatchEnroll = async () => {
+        if (!selectedSectionGroup || isBatchEnrolling) return;
+        const applicantIDs = selectedSectionGroup.applicants.map((a) => a.applicantID).filter(Boolean);
+        if (applicantIDs.length === 0) return;
+
+        try {
+            setIsBatchEnrolling(true);
+            const response = await api.post("/students/batch-enroll-preview", { applicantIDs });
+            const { placements, blocked, notFound } = response.data;
+            setPreviewData({ placements, blocked, notFound });
+            setConfirmEnrollOpen(true);
+        } catch (error) {
+            console.error("Preview failed", error);
+            toast.error(error?.response?.data?.message || "Failed to preview enrollment");
+        } finally {
+            setIsBatchEnrolling(false);
+        }
+    };
+
+    const handleConfirmBatchEnroll = async () => {
+        if (!previewData || isBatchEnrolling) return;
+        const applicantIDs = previewData.placements.map((p) => p.applicantID).filter(Boolean);
+        if (applicantIDs.length === 0) {
+            setConfirmEnrollOpen(false);
+            return;
+        }
+
+        try {
+            setIsBatchEnrolling(true);
+            const response = await api.post("/students/batch-enroll", { applicantIDs });
+            const { enrolled, blocked, notFound } = response.data;
+
+            enrolled.forEach((item) => {
+                const msg = `Enrolled ${item.applicant_name} (${item.applicantID}) successfully`;
+                pushImportNotification(msg, "success");
+            });
+            blocked.forEach((item) => {
+                const msg = `${item.applicant_name} (${item.applicantID}) : Enrollment blocked - ${item.student_number ? "Student number already exists" : item.reason}`;
+                pushImportNotification(msg, "error");
+            });
+            notFound.forEach((item) => {
+                pushImportNotification(`Applicant (${item.applicantID}) not found`, "error");
+            });
+
+            if (enrolled.length > 0) {
+                toast.success(`Enrolled ${enrolled.length} applicant(s) from ${selectedSectionGroup.year}-${selectedSectionGroup.section}`);
+            }
+            if (blocked.length > 0) {
+                toast.error(`${blocked.length} applicant(s) blocked`);
+            }
+
+            await fetchStudents();
+            await fetchSections();
+            const pendingRes = await api.get("/students/pre-admission/admitted-applicants", { params: { t: Date.now() } });
+            setPendingApplicants(Array.isArray(pendingRes.data) ? pendingRes.data : []);
+            setSelectedSectionGroup(null);
+            setConfirmEnrollOpen(false);
+            setPreviewData(null);
+        } catch (error) {
+            console.error("Batch enroll failed", error);
+            toast.error(error?.response?.data?.message || "Failed to batch enroll");
+        } finally {
+            setIsBatchEnrolling(false);
         }
     };
 
@@ -702,52 +819,182 @@ function Dashboard() {
                     </div>
                     <div className="overflow-y-auto rounded-xl border border-gray-200 flex-1 bg-white">
                         {modalTitle === "To Be Admitted" ? (
-                            <div className="rounded-xl bg-white overflow-hidden">
-                                <table className="min-w-full border-collapse text-left text-sm md:text-base whitespace-nowrap">
-                                    <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 text-gray-700">
-                                        <tr>
-                                            <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500">Applicant ID</th>
-                                            <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500">Applicant Name</th>
-                                            <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500 text-center">Status</th>
-                                            <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500 text-right">Action</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-gray-100">
-                                        {pendingModalApplicants.length > 0 ? (
-                                            pendingModalApplicants.map((applicant, index) => (
+                            selectedSectionGroup ? (
+                                // Show applicants within the selected section group
+                                <div className="rounded-xl bg-white overflow-hidden flex flex-col">
+                                    <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3">
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedSectionGroup(null)}
+                                            className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-700 hover:text-emerald-800 transition-colors"
+                                        >
+                                            <i className="fa-solid fa-arrow-left text-xs" />
+                                            Back to groups
+                                        </button>
+                                        <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                                            {selectedSectionGroup.year} - {selectedSectionGroup.section} ({selectedSectionGroup.semester})
+                                        </span>
+                                    </div>
+                                    <table className="min-w-full border-collapse text-left text-sm md:text-base whitespace-nowrap">
+                                        <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 text-gray-700">
+                                            <tr>
+                                                <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500">Applicant ID</th>
+                                                <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500">Applicant Name</th>
+                                                <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500 text-center">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {selectedSectionGroup.applicants.map((applicant, index) => (
                                                 <tr key={`${applicant.applicantID || 'applicant'}-${index}`} className="hover:bg-gray-50/80 transition-colors">
                                                     <td className="px-6 py-4 font-medium text-gray-900">{applicant.applicantID || '-'}</td>
                                                     <td className="px-6 py-4 text-gray-800">{applicant.applicant_name || '-'}</td>
                                                     <td className="px-6 py-4 text-center text-gray-700">{applicant.status || '-'}</td>
-                                                    <td className="px-6 py-4 text-right">
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleEnrollApplicant(applicant)}
-                                                            disabled={isEnrolling}
-                                                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                                                        >
-                                                            {isEnrolling ? "Enrolling..." : "Enroll"}
-                                                        </button>
-                                                    </td>
                                                 </tr>
-                                            ))
-                                        ) : (
-                                            <tr>
-                                                <td colSpan="4" className="px-6 py-12 text-center text-gray-500">
-                                                    <div className="flex flex-col items-center justify-center gap-2">
-                                                        <i className="fa-regular fa-folder-open text-3xl opacity-50"></i>
-                                                        <p>No applicants found.</p>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    <div className="sticky bottom-0 border-t border-gray-200 bg-white px-4 py-3 flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={handlePreviewBatchEnroll}
+                                            disabled={isBatchEnrolling}
+                                            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {isBatchEnrolling ? (
+                                                <>
+                                                    <i className="fa-solid fa-spinner fa-spin mr-2" />
+                                                    Loading...
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <i className="fa-solid fa-user-plus mr-2" />
+                                                    Enroll All ({selectedSectionGroup.applicants.length})
+                                                </>
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                // Show section groups
+                                <div className="rounded-xl bg-white overflow-hidden">
+                                    {applicantSectionGroups.length > 0 ? (
+                                        <div className="divide-y divide-gray-100">
+                                            {applicantSectionGroups.map((group) => (
+                                                <button
+                                                    key={group.key}
+                                                    type="button"
+                                                    onClick={() => setSelectedSectionGroup(group)}
+                                                    className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50/80 transition-colors"
+                                                >
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-700">
+                                                            <i className="fa-solid fa-layer-group text-sm" />
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-semibold text-gray-900">
+                                                                Year {group.year} - Section {group.section}
+                                                            </p>
+                                                            <p className="text-xs text-gray-500 mt-0.5">
+                                                                {group.semester} Semester &middot; {group.applicants.length} applicant(s)
+                                                            </p>
+                                                        </div>
                                                     </div>
-                                                </td>
-                                            </tr>
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="inline-flex items-center justify-center min-w-7 h-7 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">
+                                                            {group.applicants.length}
+                                                        </span>
+                                                        <i className="fa-solid fa-chevron-right text-xs text-gray-400" />
+                                                    </div>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col items-center justify-center gap-2 px-6 py-12 text-center text-gray-500">
+                                            <i className="fa-regular fa-folder-open text-3xl opacity-50"></i>
+                                            <p>No applicants found.</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )
                         ) : (
                             <StudentsTable students={modalStudents} isPendingView={false} />
                         )}
                     </div>
+                </div>
+            </Modal>
+
+            <Modal open={confirmEnrollOpen} onClose={() => { setConfirmEnrollOpen(false); setPreviewData(null); }} title="Confirm Enrollment" size="lg">
+                <div className="flex flex-col gap-4 max-h-[75vh]">
+                    {previewData && (
+                        <>
+                            {previewData.blocked.length > 0 && (
+                                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                                    <p className="text-sm font-semibold text-red-700">
+                                        {previewData.blocked.length} applicant(s) blocked (student number already exists)
+                                    </p>
+                                </div>
+                            )}
+                            {previewData.notFound.length > 0 && (
+                                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                                    <p className="text-sm font-semibold text-amber-700">
+                                        {previewData.notFound.length} applicant(s) not found
+                                    </p>
+                                </div>
+                            )}
+                            <div className="overflow-y-auto rounded-xl border border-gray-200 bg-white">
+                                <table className="min-w-full text-sm">
+                                    <thead className="sticky top-0 bg-gray-50 border-b border-gray-200 text-gray-600 uppercase text-xs">
+                                        <tr>
+                                            <th className="px-4 py-3 text-left">Applicant ID</th>
+                                            <th className="px-4 py-3 text-left">Name</th>
+                                            <th className="px-4 py-3 text-center">Assigned Section</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100">
+                                        {previewData.placements.map((p, idx) => (
+                                            <tr key={p.applicantID || idx} className="hover:bg-gray-50/80">
+                                                <td className="px-4 py-3 font-medium text-gray-900">{p.applicantID}</td>
+                                                <td className="px-4 py-3 text-gray-800">{p.applicant_name}</td>
+                                                <td className="px-4 py-3 text-center">
+                                                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 border border-emerald-200">
+                                                        <i className="fa-solid fa-layer-group text-[0.6rem]" />
+                                                        Section {p.assigned_section}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div className="flex items-center justify-end gap-3 pt-2">
+                                <button
+                                    type="button"
+                                    onClick={() => { setConfirmEnrollOpen(false); setPreviewData(null); }}
+                                    className="px-4 py-2 rounded-lg border border-gray-300 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleConfirmBatchEnroll}
+                                    disabled={isBatchEnrolling || previewData.placements.length === 0}
+                                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {isBatchEnrolling ? (
+                                        <>
+                                            <i className="fa-solid fa-spinner fa-spin" />
+                                            Enrolling...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <i className="fa-solid fa-check" />
+                                            Confirm Enroll {previewData.placements.length > 0 && `(${previewData.placements.length})`}
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        </>
+                    )}
                 </div>
             </Modal>
 
