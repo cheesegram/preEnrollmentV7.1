@@ -811,7 +811,7 @@ function Dashboard() {
             <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={modalTitle}>
                 <div className={`flex flex-col gap-4 p-4 md:p-6 overflow-hidden ${modalTitle === "To Be Admitted" ? "h-[70vh]" : "max-h-[80vh] h-full"}`}>
                     <div className="relative flex w-full shrink-0">
-                        {modalTitle === "To Be Admitted" ? (
+                        {modalTitle === "To Be Admitted" && !selectedSectionGroup ? (
                             <div className="flex flex-wrap gap-2 w-full">
                                 {yearFilterOptions.map((opt) => {
                                     const isActive = yearFilter === (opt.value ?? "All Year");
@@ -831,7 +831,7 @@ function Dashboard() {
                                     );
                                 })}
                             </div>
-                        ) : (
+                        ) : modalTitle === "To Be Admitted" && selectedSectionGroup ? null : (
                             <>
                                 <input
                                     type="text"
