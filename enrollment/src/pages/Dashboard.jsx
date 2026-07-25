@@ -32,6 +32,7 @@ function Dashboard() {
     const [selectedSectionGroup, setSelectedSectionGroup] = useState(null);
     const [previewData, setPreviewData] = useState(null);
     const [confirmEnrollOpen, setConfirmEnrollOpen] = useState(false);
+    const [showBlockedList, setShowBlockedList] = useState(false);
     const [exportTypeOpen, setExportTypeOpen] = useState(false);
     const [studentExportOpen, setStudentExportOpen] = useState(false);
     const [sectionExportOpen, setSectionExportOpen] = useState(false);
@@ -558,6 +559,7 @@ function Dashboard() {
             setSelectedSectionGroup(null);
             setConfirmEnrollOpen(false);
             setPreviewData(null);
+            setShowBlockedList(false);
         } catch (error) {
             console.error("Batch enroll failed", error);
             toast.error(error?.response?.data?.message || "Failed to batch enroll");
@@ -793,7 +795,7 @@ function Dashboard() {
             </div>
 
             <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={modalTitle}>
-                <div className="flex flex-col gap-4 p-4 md:p-6 max-h-[80vh] overflow-hidden">
+                <div className="flex flex-col gap-4 p-4 md:p-6 max-h-[80vh] h-full overflow-hidden">
                     <div className="relative flex w-full shrink-0">
                         <input
                             type="text"
@@ -817,12 +819,12 @@ function Dashboard() {
                             </button>
                         )}
                     </div>
-                    <div className="overflow-y-auto rounded-xl border border-gray-200 flex-1 bg-white">
+                    <div className="rounded-xl border border-gray-200 flex-1 bg-white min-h-0 overflow-hidden flex flex-col">
                         {modalTitle === "To Be Admitted" ? (
                             selectedSectionGroup ? (
                                 // Show applicants within the selected section group
-                                <div className="rounded-xl bg-white overflow-hidden flex flex-col">
-                                    <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3">
+                                <div className="flex flex-col flex-1 min-h-0">
+                                    <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3 shrink-0">
                                         <button
                                             type="button"
                                             onClick={() => setSelectedSectionGroup(null)}
@@ -835,25 +837,27 @@ function Dashboard() {
                                             {selectedSectionGroup.year} - {selectedSectionGroup.section} ({selectedSectionGroup.semester})
                                         </span>
                                     </div>
-                                    <table className="min-w-full border-collapse text-left text-sm md:text-base whitespace-nowrap">
-                                        <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 text-gray-700">
-                                            <tr>
-                                                <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500">Applicant ID</th>
-                                                <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500">Applicant Name</th>
-                                                <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500 text-center">Status</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-100">
-                                            {selectedSectionGroup.applicants.map((applicant, index) => (
-                                                <tr key={`${applicant.applicantID || 'applicant'}-${index}`} className="hover:bg-gray-50/80 transition-colors">
-                                                    <td className="px-6 py-4 font-medium text-gray-900">{applicant.applicantID || '-'}</td>
-                                                    <td className="px-6 py-4 text-gray-800">{applicant.applicant_name || '-'}</td>
-                                                    <td className="px-6 py-4 text-center text-gray-700">{applicant.status || '-'}</td>
+                                    <div className="overflow-y-auto flex-1 min-h-0">
+                                        <table className="min-w-full border-collapse text-left text-sm md:text-base whitespace-nowrap">
+                                            <thead className="sticky top-0 z-10 bg-gray-50 text-gray-700">
+                                                <tr>
+                                                    <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500 border-b border-gray-200">Applicant ID</th>
+                                                    <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500 border-b border-gray-200">Applicant Name</th>
+                                                    <th className="px-6 py-4 font-semibold text-xs uppercase tracking-wider text-gray-500 text-center border-b border-gray-200">Status</th>
                                                 </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                    <div className="sticky bottom-0 border-t border-gray-200 bg-white px-4 py-3 flex justify-end">
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-100">
+                                                {selectedSectionGroup.applicants.map((applicant, index) => (
+                                                    <tr key={`${applicant.applicantID || 'applicant'}-${index}`} className="hover:bg-gray-50/80 transition-colors">
+                                                        <td className="px-6 py-4 font-medium text-gray-900">{applicant.applicantID || '-'}</td>
+                                                        <td className="px-6 py-4 text-gray-800">{applicant.applicant_name || '-'}</td>
+                                                        <td className="px-6 py-4 text-center text-gray-700">{applicant.status || '-'}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div className="border-t border-gray-200 bg-white px-4 py-3 flex justify-end shrink-0">
                                         <button
                                             type="button"
                                             onClick={handlePreviewBatchEnroll}
@@ -876,7 +880,7 @@ function Dashboard() {
                                 </div>
                             ) : (
                                 // Show section groups
-                                <div className="rounded-xl bg-white overflow-hidden">
+                                <div className="rounded-xl bg-white flex-1 min-h-0 overflow-y-auto">
                                     {applicantSectionGroups.length > 0 ? (
                                         <div className="divide-y divide-gray-100">
                                             {applicantSectionGroups.map((group) => (
@@ -923,15 +927,38 @@ function Dashboard() {
                 </div>
             </Modal>
 
-            <Modal open={confirmEnrollOpen} onClose={() => { setConfirmEnrollOpen(false); setPreviewData(null); }} title="Confirm Enrollment" size="lg">
+            <Modal open={confirmEnrollOpen} onClose={() => { setConfirmEnrollOpen(false); setPreviewData(null); setShowBlockedList(false); }} title="Confirm Enrollment" size="lg">
                 <div className="flex flex-col gap-4 max-h-[75vh]">
                     {previewData && (
                         <>
                             {previewData.blocked.length > 0 && (
                                 <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
-                                    <p className="text-sm font-semibold text-red-700">
-                                        {previewData.blocked.length} applicant(s) blocked (student number already exists)
-                                    </p>
+                                    <div className="flex items-center justify-between">
+                                        <p className="text-sm font-semibold text-red-700">
+                                            {previewData.blocked.length} applicant(s) blocked (student number already exists)
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowBlockedList((prev) => !prev)}
+                                            className="grid h-8 w-8 place-items-center rounded-lg text-red-600 transition hover:bg-red-100"
+                                            aria-label={showBlockedList ? "Hide blocked applicants" : "Show blocked applicants"}
+                                            title={showBlockedList ? "Hide blocked applicants" : "Show blocked applicants"}
+                                        >
+                                            <i className={`fa-solid ${showBlockedList ? "fa-eye-slash" : "fa-eye"} text-sm`} />
+                                        </button>
+                                    </div>
+                                    {showBlockedList && (
+                                        <p className="mt-2 border-t border-red-200 pt-2 text-sm text-red-700">
+                                            {previewData.blocked.map((item, idx) => (
+                                                <span key={item.applicantID || idx}>
+                                                    {idx > 0 && <span className="mx-2 text-red-400">|</span>}
+                                                    <span className="font-semibold">{item.applicantID}</span>
+                                                    <span className="mx-1 text-red-400">—</span>
+                                                    <span>{item.applicant_name}</span>
+                                                </span>
+                                            ))}
+                                        </p>
+                                    )}
                                 </div>
                             )}
                             {previewData.notFound.length > 0 && (

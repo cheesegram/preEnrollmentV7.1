@@ -273,8 +273,15 @@ export async function getToBeAdmittedApplicants(req, res) {
   try {
     const ToBeAdmitted = getPreEnrollmentModel("ToBeAdmitted", "to_be_admitted");
 
+    // Only fetch applicants that have year, section, and semester values
     const applicants = await ToBeAdmitted.find(
-      {},
+      {
+        $and: [
+          { year: { $exists: true, $ne: null, $ne: "" } },
+          { section: { $exists: true, $ne: null, $ne: "" } },
+          { semester: { $exists: true, $ne: null, $ne: "" } },
+        ],
+      },
       {
         _id: 0,
         applicantID: 1,
@@ -283,6 +290,9 @@ export async function getToBeAdmittedApplicants(req, res) {
         first_name: 1,
         last_name: 1,
         status: 1,
+        year: 1,
+        section: 1,
+        semester: 1,
       }
     ).lean();
 
@@ -297,6 +307,9 @@ export async function getToBeAdmittedApplicants(req, res) {
         applicantID,
         applicant_name: `${firstName} ${lastName}`.trim(),
         status: String(applicant.status ?? "Pending").trim() || "Pending",
+        year: String(applicant.year ?? "").trim(),
+        section: String(applicant.section ?? "").trim(),
+        semester: String(applicant.semester ?? "").trim(),
       };
     }).filter((applicant) => applicant.applicantID || applicant.applicant_name || applicant.status);
 
@@ -311,7 +324,34 @@ export async function getAdmittedApplicants(req, res) {
   try {
     const AdmittedApplicants = getPreAdmissionModel("AdmittedApplicant", "admitted-applicants");
 
-    const applicants = await AdmittedApplicants.find({}).lean();
+    // Only fetch applicants that have year, section, and semester values
+    const applicants = await AdmittedApplicants.find(
+      {
+        $and: [
+          {
+            $or: [
+              { year: { $exists: true, $ne: null, $ne: "" } },
+              { curriculum_year: { $exists: true, $ne: null, $ne: "" } },
+              { year_level: { $exists: true, $ne: null, $ne: "" } },
+            ],
+          },
+          {
+            $or: [
+              { section: { $exists: true, $ne: null, $ne: "" } },
+              { curriculum_section: { $exists: true, $ne: null, $ne: "" } },
+              { section_name: { $exists: true, $ne: null, $ne: "" } },
+            ],
+          },
+          {
+            $or: [
+              { semester: { $exists: true, $ne: null, $ne: "" } },
+              { curriculum_semester: { $exists: true, $ne: null, $ne: "" } },
+              { term: { $exists: true, $ne: null, $ne: "" } },
+            ],
+          },
+        ],
+      }
+    ).lean();
 
     const formattedApplicants = applicants.map((applicant) => {
       // Try multiple possible field name variations
@@ -381,7 +421,12 @@ export async function getAdmittedApplicants(req, res) {
         semester: semester || "N/A",
         section: section || "N/A",
       };
-    }).filter((applicant) => applicant.applicantID || applicant.applicant_name || applicant.status);
+    }).filter((applicant) => {
+      // Only include applicants that have all three attributes after extraction
+      if (!applicant.applicantID && !applicant.applicant_name && !applicant.status) return false;
+      if (applicant.year === "N/A" || applicant.semester === "N/A" || applicant.section === "N/A") return false;
+      return true;
+    });
 
     res.status(200).json(formattedApplicants);
   } catch (error) {
