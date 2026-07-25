@@ -26,13 +26,14 @@ function Dashboard() {
     const [pendingApplicants, setPendingApplicants] = useState([]);
     const [loading, setLoading] = useState(true);
     const [modalQuery, setModalQuery] = useState("");
+    const [yearFilter, setYearFilter] = useState("All Year");
     const [isImporting, setIsImporting] = useState(false);
     const [isEnrolling, setIsEnrolling] = useState(false);
     const [isBatchEnrolling, setIsBatchEnrolling] = useState(false);
     const [selectedSectionGroup, setSelectedSectionGroup] = useState(null);
     const [previewData, setPreviewData] = useState(null);
     const [confirmEnrollOpen, setConfirmEnrollOpen] = useState(false);
-    const [showBlockedList, setShowBlockedList] = useState(false);
+    const [blockedListModalOpen, setBlockedListModalOpen] = useState(false);
     const [exportTypeOpen, setExportTypeOpen] = useState(false);
     const [studentExportOpen, setStudentExportOpen] = useState(false);
     const [sectionExportOpen, setSectionExportOpen] = useState(false);
@@ -118,6 +119,7 @@ function Dashboard() {
         setBottomSheetDismissed(true);
         setModalTitle(title);
         setModalQuery("");
+        setYearFilter("All Year");
         setSelectedSectionGroup(null);
         setModalOpen(true);
     };
@@ -473,6 +475,15 @@ function Dashboard() {
         }
     };
 
+    // Year filter mapping: display labels -> numeric values used in data
+    const yearFilterOptions = [
+        { label: "All Year", value: null },
+        { label: "First Year", value: "1" },
+        { label: "Second Year", value: "2" },
+        { label: "Third Year", value: "3" },
+        { label: "Fourth Year", value: "4" },
+    ];
+
     // Group pending applicants by year, semester, section for the "To Be Admitted" UI
     const applicantSectionGroups = useMemo(() => {
         const groups = {};
@@ -492,14 +503,17 @@ function Dashboard() {
             }
             groups[key].applicants.push(applicant);
         });
-        return Object.values(groups).sort((a, b) => {
+        return Object.values(groups).filter((group) => {
+            if (yearFilter === "All Year") return true;
+            return group.year === yearFilter;
+        }).sort((a, b) => {
             const yearCmp = a.year.localeCompare(b.year, undefined, { numeric: true, sensitivity: "base" });
             if (yearCmp !== 0) return yearCmp;
             const semesterCmp = a.semester.localeCompare(b.semester, undefined, { numeric: true, sensitivity: "base" });
             if (semesterCmp !== 0) return semesterCmp;
             return a.section.localeCompare(b.section, undefined, { numeric: true, sensitivity: "base" });
         });
-    }, [pendingModalApplicants]);
+    }, [pendingModalApplicants, yearFilter]);
 
     const handlePreviewBatchEnroll = async () => {
         if (!selectedSectionGroup || isBatchEnrolling) return;
@@ -559,7 +573,7 @@ function Dashboard() {
             setSelectedSectionGroup(null);
             setConfirmEnrollOpen(false);
             setPreviewData(null);
-            setShowBlockedList(false);
+            setBlockedListModalOpen(false);
         } catch (error) {
             console.error("Batch enroll failed", error);
             toast.error(error?.response?.data?.message || "Failed to batch enroll");
@@ -795,28 +809,52 @@ function Dashboard() {
             </div>
 
             <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={modalTitle}>
-                <div className="flex flex-col gap-4 p-4 md:p-6 max-h-[80vh] h-full overflow-hidden">
+                <div className={`flex flex-col gap-4 p-4 md:p-6 overflow-hidden ${modalTitle === "To Be Admitted" ? "h-[70vh]" : "max-h-[80vh] h-full"}`}>
                     <div className="relative flex w-full shrink-0">
-                        <input
-                            type="text"
-                            inputMode="search"
-                            placeholder={modalTitle === "To Be Admitted" ? "Search by Applicant Name or Number..." : "Search by Student Name or Number..."}
-                            value={modalQuery}
-                            onChange={e => setModalQuery(e.target.value)}
-                            className="rounded-xl border border-gray-300 p-3 pl-11 pr-10 w-full focus:ring-2 focus:ring-[#2E522A] focus:border-transparent outline-none transition-shadow"
-                        />
-                        <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                            <i className="fa-solid fa-magnifying-glass text-gray-400"></i>
-                        </div>
-                        {modalQuery && (
-                            <button
-                                type="button"
-                                onClick={() => setModalQuery("")}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none p-1"
-                                aria-label="Clear search"
-                            >
-                                ✕
-                            </button>
+                        {modalTitle === "To Be Admitted" ? (
+                            <div className="flex flex-wrap gap-2 w-full">
+                                {yearFilterOptions.map((opt) => {
+                                    const isActive = yearFilter === (opt.value ?? "All Year");
+                                    return (
+                                        <button
+                                            key={opt.label}
+                                            type="button"
+                                            onClick={() => setYearFilter(opt.value ?? "All Year")}
+                                            className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[#2E522A] focus:ring-offset-1 ${
+                                                isActive
+                                                    ? "bg-[#2E522A] text-white shadow-sm"
+                                                    : "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50"
+                                            }`}
+                                        >
+                                            {opt.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <>
+                                <input
+                                    type="text"
+                                    inputMode="search"
+                                    placeholder="Search by Student Name or Number..."
+                                    value={modalQuery}
+                                    onChange={e => setModalQuery(e.target.value)}
+                                    className="rounded-xl border border-gray-300 p-3 pl-11 pr-10 w-full focus:ring-2 focus:ring-[#2E522A] focus:border-transparent outline-none transition-shadow"
+                                />
+                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                                    <i className="fa-solid fa-magnifying-glass text-gray-400"></i>
+                                </div>
+                                {modalQuery && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setModalQuery("")}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none p-1"
+                                        aria-label="Clear search"
+                                    >
+                                        ✕
+                                    </button>
+                                )}
+                            </>
                         )}
                     </div>
                     <div className="rounded-xl border border-gray-200 flex-1 bg-white min-h-0 overflow-hidden flex flex-col">
@@ -880,7 +918,7 @@ function Dashboard() {
                                 </div>
                             ) : (
                                 // Show section groups
-                                <div className="rounded-xl bg-white flex-1 min-h-0 overflow-y-auto">
+                                <div className="flex-1 min-h-0 overflow-y-auto">
                                     {applicantSectionGroups.length > 0 ? (
                                         <div className="divide-y divide-gray-100">
                                             {applicantSectionGroups.map((group) => (
@@ -888,26 +926,26 @@ function Dashboard() {
                                                     key={group.key}
                                                     type="button"
                                                     onClick={() => setSelectedSectionGroup(group)}
-                                                    className="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-gray-50/80 transition-colors"
+                                                    className="w-full flex items-center justify-between px-3 py-4 text-left hover:bg-gray-50/80 transition-colors"
                                                 >
-                                                    <div className="flex items-center gap-3">
-                                                        <div className="grid h-10 w-10 place-items-center rounded-lg bg-emerald-50 text-emerald-700">
-                                                            <i className="fa-solid fa-layer-group text-sm" />
+                                                    <div className="flex items-center gap-2 min-w-0">
+                                                        <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-emerald-50 text-emerald-700">
+                                                            <i className="fa-solid fa-layer-group text-xs" />
                                                         </div>
-                                                        <div>
-                                                            <p className="font-semibold text-gray-900">
+                                                        <div className="min-w-0">
+                                                            <p className="text-sm font-semibold text-gray-900 truncate">
                                                                 Year {group.year} - Section {group.section}
                                                             </p>
-                                                            <p className="text-xs text-gray-500 mt-0.5">
+                                                            <p className="text-xs text-gray-500">
                                                                 {group.semester} Semester &middot; {group.applicants.length} applicant(s)
                                                             </p>
                                                         </div>
                                                     </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="inline-flex items-center justify-center min-w-7 h-7 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">
+                                                    <div className="flex items-center gap-1.5 shrink-0">
+                                                        <span className="inline-flex items-center justify-center min-w-6 h-6 rounded-full bg-emerald-100 text-emerald-800 text-[0.65rem] font-bold">
                                                             {group.applicants.length}
                                                         </span>
-                                                        <i className="fa-solid fa-chevron-right text-xs text-gray-400" />
+                                                        <i className="fa-solid fa-chevron-right text-[0.6rem] text-gray-400" />
                                                     </div>
                                                 </button>
                                             ))}
@@ -927,7 +965,7 @@ function Dashboard() {
                 </div>
             </Modal>
 
-            <Modal open={confirmEnrollOpen} onClose={() => { setConfirmEnrollOpen(false); setPreviewData(null); setShowBlockedList(false); }} title="Confirm Enrollment" size="lg">
+            <Modal open={confirmEnrollOpen} onClose={() => { setConfirmEnrollOpen(false); setPreviewData(null); setBlockedListModalOpen(false); }} title="Confirm Enrollment" size="lg">
                 <div className="flex flex-col gap-4 max-h-[75vh]">
                     {previewData && (
                         <>
@@ -939,26 +977,14 @@ function Dashboard() {
                                         </p>
                                         <button
                                             type="button"
-                                            onClick={() => setShowBlockedList((prev) => !prev)}
+                                            onClick={() => setBlockedListModalOpen(true)}
                                             className="grid h-8 w-8 place-items-center rounded-lg text-red-600 transition hover:bg-red-100"
-                                            aria-label={showBlockedList ? "Hide blocked applicants" : "Show blocked applicants"}
-                                            title={showBlockedList ? "Hide blocked applicants" : "Show blocked applicants"}
+                                            aria-label="Show blocked applicants"
+                                            title="Show blocked applicants"
                                         >
-                                            <i className={`fa-solid ${showBlockedList ? "fa-eye-slash" : "fa-eye"} text-sm`} />
+                                            <i className="fa-solid fa-eye text-sm" />
                                         </button>
                                     </div>
-                                    {showBlockedList && (
-                                        <p className="mt-2 border-t border-red-200 pt-2 text-sm text-red-700">
-                                            {previewData.blocked.map((item, idx) => (
-                                                <span key={item.applicantID || idx}>
-                                                    {idx > 0 && <span className="mx-2 text-red-400">|</span>}
-                                                    <span className="font-semibold">{item.applicantID}</span>
-                                                    <span className="mx-1 text-red-400">—</span>
-                                                    <span>{item.applicant_name}</span>
-                                                </span>
-                                            ))}
-                                        </p>
-                                    )}
                                 </div>
                             )}
                             {previewData.notFound.length > 0 && (
@@ -1022,6 +1048,32 @@ function Dashboard() {
                             </div>
                         </>
                     )}
+                </div>
+            </Modal>
+
+            <Modal open={blockedListModalOpen} onClose={() => setBlockedListModalOpen(false)} title="Blocked Applicants" size="sm">
+                <div className="flex flex-col gap-3 max-h-[60vh] min-h-[8rem]">
+                    <p className="text-sm text-red-700 font-semibold">
+                        {previewData?.blocked.length} applicant(s) blocked (student number already exists)
+                    </p>
+                    <div className="overflow-y-auto rounded-lg border border-red-200 bg-red-50">
+                        <table className="min-w-full text-sm">
+                            <thead className="sticky top-0 z-10 bg-red-100 border-b border-red-200 text-red-800 uppercase text-xs">
+                                <tr>
+                                    <th className="px-4 py-2.5 text-left font-semibold">Applicant ID</th>
+                                    <th className="px-4 py-2.5 text-left font-semibold">Name</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-red-100">
+                                {previewData?.blocked.map((item, idx) => (
+                                    <tr key={item.applicantID || idx} className="hover:bg-red-100/50">
+                                        <td className="px-4 py-2.5 font-medium text-red-900">{item.applicantID}</td>
+                                        <td className="px-4 py-2.5 text-red-800">{item.applicant_name}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </Modal>
 
